@@ -4,11 +4,16 @@ use tracing_subscriber::{fmt, EnvFilter};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _ = if std::env::var("RUST_LOG").is_err() {
-        fmt().with_env_filter(EnvFilter::default().add_directive("info".parse().unwrap())).try_init()
+        fmt()
+            .with_env_filter(EnvFilter::default().add_directive("info".parse().unwrap()))
+            .try_init()
     } else {
-        fmt().with_env_filter(EnvFilter::from_default_env()).try_init()
+        fmt()
+            .with_env_filter(EnvFilter::from_default_env())
+            .try_init()
     };
-    info!("{}", xeonvpn_core::banner("Server"));
+    let banner = xeonvpn_core::banner("Server");
+    info!("{banner}");
 
     let addr = "0.0.0.0:4433";
     info!("starting QUIC server on {addr}");

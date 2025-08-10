@@ -1,7 +1,27 @@
-use std::{net::SocketAddr, sync::Arc};
 use quinn::{Endpoint, ServerConfig};
 use rcgen::generate_simple_self_signed;
+use std::{net::SocketAddr, sync::Arc};
 use tracing::{error, info};
+
+async fn handle_doh_query(
+    query: &str,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    // query is expected like: "DOH example.com" (domain only). Optional type not supported yet.
+    let domain = query.trim();
+    let encoded = urlencoding::encode(domain);
+    let url = format!("https://cloudflare-dns.com/dns-query?name={encoded}&type=A");
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("accept", "application/dns-json")
+        .send()
+        .await?;
+    let status = resp.status();
+    let body = resp.text().await?;
+    let status_code = status.as_u16();
+    let out = format!("{{\"status\":{status_code},\"body\":{body}}}");
+    Ok(out.into_bytes())
+}
 
 fn build_server_config() -> Result<ServerConfig, Box<dyn std::error::Error + Send + Sync>> {
     let cert = generate_simple_self_signed(["localhost".into()])?;
@@ -22,7 +42,8 @@ fn build_server_config() -> Result<ServerConfig, Box<dyn std::error::Error + Sen
     if let Err(e) = std::fs::write("server_cert.der", &cert_der) {
         error!("failed to write server_cert.der: {e}");
     } else {
-        info!("wrote server_cert.der ({} bytes)", cert_der.len());
+        let len = cert_der.len();
+        info!("wrote server_cert.der ({len} bytes)");
     }
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(server_crypto));
@@ -37,45 +58,71 @@ pub async fn serve_quic(addr: &str) -> Result<(), Box<dyn std::error::Error + Se
     let server_config = build_server_config()?;
     let addr: SocketAddr = addr.parse()?;
     let endpoint = Endpoint::server(server_config, addr)?;
-    info!("QUIC server listening on {}", endpoint.local_addr()?);
+    let local = endpoint.local_addr()?;
+    info!("QUIC server listening on {local}");
 
-    loop {
-        match endpoint.accept().await {
-            Some(connecting) => {
-                tokio::spawn(async move {
-                    match connecting.await {
-                        Ok(connection) => {
-                            info!("new connection: {}", connection.remote_address());
-                            loop {
-                                match connection.accept_bi().await {
-                                    Ok((mut send, mut recv)) => {
-                                        match recv.read_to_end(64 * 1024).await {
-                                            Ok(data) => {
-                                                if let Err(e) = send.write_all(&data).await { error!("send error: {e}"); }
+    while let Some(connecting) = endpoint.accept().await {
+        tokio::spawn(async move {
+            match connecting.await {
+                Ok(connection) => {
+                    let remote = connection.remote_address();
+                    info!("new connection: {remote}");
+                    loop {
+                        match connection.accept_bi().await {
+                            Ok((mut send, mut recv)) => {
+                                match recv.read_to_end(64 * 1024).await {
+                                    Ok(data) => {
+                                        // Try to interpret as UTF-8 command
+                                        if let Ok(text) = std::str::from_utf8(&data) {
+                                            let t = text.trim();
+                                            if let Some(rest) = t.strip_prefix("DOH ") {
+                                                info!("DoH request for domain: {rest}");
+                                                match handle_doh_query(rest).await {
+                                                    Ok(json_bytes) => {
+                                                        if let Err(e) =
+                                                            send.write_all(&json_bytes).await
+                                                        {
+                                                            error!("send DoH resp error: {e}");
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        let msg = e.to_string();
+                                                        let _ =
+                                                            send.write_all(msg.as_bytes()).await;
+                                                    }
+                                                }
+                                                let _ = send.finish().await;
+                                            } else {
+                                                // Fallback echo
+                                                if let Err(e) = send.write_all(&data).await {
+                                                    error!("send error: {e}");
+                                                }
                                                 let _ = send.finish().await;
                                             }
-                                            Err(e) => {
-                                                error!("recv error: {e}");
-                                                break;
+                                        } else {
+                                            // Non-UTF8 payload: echo
+                                            if let Err(e) = send.write_all(&data).await {
+                                                error!("send error: {e}");
                                             }
+                                            let _ = send.finish().await;
                                         }
                                     }
                                     Err(e) => {
-                                        error!("accept_bi error: {e}");
+                                        error!("recv error: {e}");
                                         break;
                                     }
                                 }
                             }
+                            Err(e) => {
+                                error!("accept_bi error: {e}");
+                                break;
+                            }
                         }
-                        Err(e) => error!("handshake failed: {e}"),
                     }
-                });
+                }
+                Err(e) => error!("handshake failed: {e}"),
             }
-            None => {
-                // Endpoint closed
-                break;
-            }
-        }
+        });
     }
 
     Ok(())

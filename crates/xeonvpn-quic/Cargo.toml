@@ -11,3 +11,5 @@ tracing = "0.1"
 rustls = "0.21"
 rcgen = "0.12"
 futures-util = { version = "0.3", features = ["io"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+urlencoding = "2"
