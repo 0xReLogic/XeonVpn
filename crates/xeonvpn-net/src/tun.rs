@@ -7,7 +7,8 @@ use std::{error::Error, net::Ipv4Addr};
 use tokio::io::AsyncReadExt;
 use tracing::info;
 
-pub async fn run_tun_poc() -> Result<(), Box<dyn Error + Send + Sync>> {
+/// Read a single packet from a Linux TUN `xeonvpn0` and return the bytes (truncated to length).
+pub async fn read_one_packet() -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     info!("starting Linux TUN POC (xeonvpn0)");
 
     let mut config = tun::Configuration::default();
@@ -24,6 +25,13 @@ pub async fn run_tun_poc() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut buf = vec![0u8; 2000];
     let n = dev.read(&mut buf).await?;
     info!("received {n} bytes from TUN xeonvpn0");
+    buf.truncate(n);
+    Ok(buf)
+}
 
+/// Backward-compatible POC: read one packet and only log the size.
+pub async fn run_tun_poc() -> Result<(), Box<dyn Error + Send + Sync>> {
+    let pkt = read_one_packet().await?;
+    info!("TUN POC read {} bytes", pkt.len());
     Ok(())
 }

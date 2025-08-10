@@ -35,7 +35,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if args.iter().any(|a| a == "--tun") {
         #[cfg(target_os = "linux")]
         {
-            xeonvpn_net::run_tun_poc().await?;
+            // Load server cert
+            let cert_der =
+                fs::read("server_cert.der").or_else(|_| fs::read("../server_cert.der"))?;
+            let client_config = build_client_config(&cert_der)?;
+
+            // Create endpoint and connect
+            let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse()?)?;
+            endpoint.set_default_client_config(client_config);
+            let connect = endpoint.connect("127.0.0.1:4433".parse()?, "localhost")?;
+            let connection = connect.await?;
+            let addr = connection.remote_address();
+            info!("connected: {addr}");
+            println!("[client] connected to {addr}");
+
+            // Read one packet from TUN and send over QUIC with a simple header
+            let pkt = xeonvpn_net::read_one_packet().await?;
+            let mut header = Vec::with_capacity(4 + 4 + pkt.len());
+            header.extend_from_slice(b"TUN ");
+            header.extend_from_slice(&(pkt.len() as u32).to_be_bytes());
+            header.extend_from_slice(&pkt);
+
+            let (mut send, mut recv) = connection.open_bi().await?;
+            send.write_all(&header).await?;
+            send.finish().await?;
+
+            // Expect echo; verify header and length, then print sizes
+            let resp = recv.read_to_end(256 * 1024).await?;
+            if resp.len() >= 8 && &resp[0..4] == b"TUN " {
+                let len = u32::from_be_bytes([resp[4], resp[5], resp[6], resp[7]]) as usize;
+                println!(
+                    "[client] TUN sent {} bytes, echoed header len {}, payload echo {} bytes",
+                    pkt.len(),
+                    len,
+                    resp.len().saturating_sub(8)
+                );
+            } else {
+                println!("[client] unexpected echo size {} bytes", resp.len());
+            }
             return Ok(());
         }
         #[cfg(not(target_os = "linux"))]
