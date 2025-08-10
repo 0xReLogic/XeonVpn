@@ -1,0 +1,7 @@
+[package]
+name = "xeonvpn-net"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+xeonvpn-core = { path = "../xeonvpn-core" }

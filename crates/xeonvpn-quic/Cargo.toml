@@ -1,0 +1,13 @@
+[package]
+name = "xeonvpn-quic"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+xeonvpn-core = { path = "../xeonvpn-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+quinn = "0.10"
+tracing = "0.1"
+rustls = "0.21"
+rcgen = "0.12"
+futures-util = { version = "0.3", features = ["io"] }

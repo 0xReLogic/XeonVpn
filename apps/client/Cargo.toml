@@ -1,0 +1,14 @@
+[package]
+name = "xeonvpn-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+xeonvpn-core = { path = "../../crates/xeonvpn-core" }
+xeonvpn-net = { path = "../../crates/xeonvpn-net" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+quinn = "0.10"
+rustls = "0.21"
+futures-util = { version = "0.3", features = ["io"] }
