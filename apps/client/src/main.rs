@@ -1,6 +1,8 @@
 use std::{fs, sync::Arc};
 use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Mutex;
 
 fn build_client_config(
     cert_der: &[u8],
@@ -78,6 +80,96 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         #[cfg(not(target_os = "linux"))]
         {
             eprintln!("--tun is only supported on Linux for now");
+            return Ok(());
+        }
+    }
+
+    // TUN loop POC: `--tun-loop` (Linux only)
+    if args.iter().any(|a| a == "--tun-loop") {
+        #[cfg(target_os = "linux")]
+        {
+            // Load server cert
+            let cert_der = fs::read("server_cert.der").or_else(|_| fs::read("../server_cert.der"))?;
+            let client_config = build_client_config(&cert_der)?;
+
+            // Create endpoint and connect
+            let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse()?)?;
+            endpoint.set_default_client_config(client_config);
+            let connect = endpoint.connect("127.0.0.1:4433".parse()?, "localhost")?;
+            let connection = connect.await?;
+            let addr = connection.remote_address();
+            info!("connected: {addr}");
+            println!("[client] connected to {addr}");
+
+            // Keep TUN open during the whole loop (shared)
+            let dev = Arc::new(Mutex::new(xeonvpn_net::open_tun().await?));
+            // Open one long-lived bidirectional stream
+            let (mut send, mut recv) = connection.open_bi().await?;
+
+            // Uplink task: read from TUN and send to server
+            let dev_u = dev.clone();
+            let uplink = tokio::spawn(async move {
+                loop {
+                    let mut buf = vec![0u8; 2000];
+                    let n = {
+                        let mut d = dev_u.lock().await;
+                        match d.read(&mut buf).await {
+                            Ok(n) => n,
+                            Err(e) => {
+                                eprintln!("[client] TUN read error: {e}");
+                                break;
+                            }
+                        }
+                    };
+                    if n == 0 {
+                        continue;
+                    }
+                    let pkt = &buf[..n];
+                    let mut frame = Vec::with_capacity(8 + pkt.len());
+                    frame.extend_from_slice(b"TUN ");
+                    frame.extend_from_slice(&(pkt.len() as u32).to_be_bytes());
+                    frame.extend_from_slice(pkt);
+                    if let Err(e) = send.write_all(&frame).await {
+                        eprintln!("[client] QUIC send error: {e}");
+                        break;
+                    }
+                }
+            });
+
+            // Downlink task: read from server and write to TUN
+            let dev_d = dev.clone();
+            let downlink = tokio::spawn(async move {
+                loop {
+                    let mut hdr = [0u8; 8];
+                    if let Err(e) = recv.read_exact(&mut hdr).await {
+                        eprintln!("[client] QUIC recv header error: {e}");
+                        break;
+                    }
+                    if &hdr[0..4] != b"TUN " {
+                        eprintln!("[client] bad magic in reply");
+                        continue;
+                    }
+                    let len = u32::from_be_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as usize;
+                    let mut payload = vec![0u8; len.min(65535)];
+                    if let Err(e) = recv.read_exact(&mut payload).await {
+                        eprintln!("[client] QUIC recv payload error: {e}");
+                        break;
+                    }
+                    if let Err(e) = {
+                        let mut d = dev_d.lock().await;
+                        d.write_all(&payload).await
+                    } {
+                        eprintln!("[client] write to TUN failed: {e}");
+                        break;
+                    }
+                }
+            });
+
+            let _ = tokio::join!(uplink, downlink);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            eprintln!("--tun-loop is only supported on Linux for now");
             return Ok(());
         }
     }
