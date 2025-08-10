@@ -7,6 +7,30 @@ use std::{error::Error, net::Ipv4Addr};
 use tokio::io::AsyncReadExt;
 use tracing::info;
 
+/// Open (and keep) a Linux TUN with the given name and IPv4 address.
+pub async fn open_tun_named(
+    name: &str,
+    addr: Ipv4Addr,
+) -> Result<tun::AsyncDevice, Box<dyn Error + Send + Sync>> {
+    info!("starting Linux TUN POC ({name})");
+
+    let mut config = tun::Configuration::default();
+    config
+        .name(name)
+        .address(addr)
+        .netmask(Ipv4Addr::new(255, 255, 255, 0))
+        .mtu(1500)
+        .up();
+
+    let dev = tun::create_as_async(&config)?;
+    Ok(dev)
+}
+
+/// Open (and keep) a Linux TUN `xeonvpn0` interface up. Returns the async device handle.
+pub async fn open_tun() -> Result<tun::AsyncDevice, Box<dyn Error + Send + Sync>> {
+    open_tun_named("xeonvpn0", Ipv4Addr::new(10, 123, 0, 2)).await
+}
+
 /// Read a single packet from a Linux TUN `xeonvpn0` and return the bytes (truncated to length).
 pub async fn read_one_packet() -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     info!("starting Linux TUN POC (xeonvpn0)");

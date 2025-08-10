@@ -18,8 +18,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = "0.0.0.0:4433";
     info!("starting QUIC server on {addr}");
 
+    let args: Vec<String> = std::env::args().collect();
+    let use_tun = args.iter().any(|a| a == "--tun-server");
+
     let server_task = tokio::spawn(async move {
-        if let Err(e) = xeonvpn_quic::serve_quic(addr).await {
+        if use_tun {
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(e) = xeonvpn_quic::serve_quic_tun(addr).await {
+                    eprintln!("server error: {e}");
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                eprintln!("--tun-server is only supported on Linux for now");
+                if let Err(e) = xeonvpn_quic::serve_quic(addr).await {
+                    eprintln!("server error: {e}");
+                }
+            }
+        } else if let Err(e) = xeonvpn_quic::serve_quic(addr).await {
             eprintln!("server error: {e}");
         }
     });

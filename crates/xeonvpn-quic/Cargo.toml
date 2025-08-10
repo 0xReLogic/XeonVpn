@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 xeonvpn-core = { path = "../xeonvpn-core" }
+xeonvpn-net = { path = "../xeonvpn-net" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 quinn = "0.10"
 tracing = "0.1"

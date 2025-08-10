@@ -2068,6 +2068,7 @@ dependencies = [
  "tracing",
  "urlencoding",
  "xeonvpn-core",
+ "xeonvpn-net",
 ]
 
 [[package]]

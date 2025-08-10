@@ -6,4 +6,4 @@ pub fn init_networking() {
 pub mod tun;
 
 #[cfg(target_os = "linux")]
-pub use tun::{read_one_packet, run_tun_poc};
+pub use tun::{open_tun, open_tun_named, read_one_packet, run_tun_poc};
